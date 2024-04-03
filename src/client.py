@@ -3,7 +3,7 @@ import requests
 def handle_response(response):
     try:
         print("Response:", response.json())
-    except ValueError:
+    except ValueError:  # Includes simplejson.decoder.JSONDecodeError
         print("Operation completed successfully, but no data returned.")
 
 def register_user():
@@ -66,8 +66,10 @@ def get_image():
     handle_response(response)
 
 def delete_image():
+    username = input("Enter Username: ")
+    project_id = input("Enter Project ID: ")
     image_id = input("Enter Image ID to delete: ")
-    url = f"http://localhost:8000/delete_image/{image_id}/"
+    url = f"http://localhost:8000/delete_image/{username}/{project_id}/{image_id}/"
     response = requests.delete(url)
     handle_response(response)
 
@@ -88,6 +90,31 @@ def configure_training():
     response = requests.post(url, json=config_data)
     handle_response(response)
 
+def enqueue_training():
+    project_id = input("Enter Project ID to enqueue for training: ")
+    url = f"http://localhost:8000/enqueue_training/{project_id}/"
+    response = requests.post(url)
+    handle_response(response)
+
+def get_training_results():
+    project_id = input("Enter Project ID to get training results: ")
+    url = f"http://localhost:8000/training_results/{project_id}/" 
+    response = requests.get(url)
+    handle_response(response)
+
+def enqueue_inference():
+    project_id = input("Enter Project ID for inference: ")
+    image_id = input("Enter Image ID for inference: ")
+    url = f"http://localhost:8000/enqueue_inference/{project_id}/{image_id}/"
+    response = requests.post(url)
+    handle_response(response)
+
+def get_inference_results():
+    image_id = input("Enter Image ID to get inference results: ")
+    url = f"http://localhost:8000/inference_results/{image_id}/"
+    response = requests.get(url)
+    handle_response(response)
+
 def main():
     actions = {
         '1': register_user,
@@ -101,10 +128,31 @@ def main():
         '9': delete_image,
         '10': analyze_project,
         '11': configure_training,
-        '12': exit
+        '12': enqueue_training,
+        '13': get_training_results,
+        '14': enqueue_inference,
+        '15': get_inference_results,
+        '16': exit
     }
     while True:
-        choice = input("\nEnter number: \n1. Register User\n2. Create Project\n3. Get User Info\n4. Get Project Info\n5. Delete User\n6. Delete Project\n7. Upload Image\n8. Get Image Info\n9. Delete Image\n10. Analyze Project\n11. Configure Training\n12. Quit\n")
+        choice = input("\nEnter number: \n"
+                       "1. Register User\n"
+                       "2. Create Project\n"
+                       "3. Get User Info\n"
+                       "4. Get Project Info\n"
+                       "5. Delete User\n"
+                       "6. Delete Project\n"
+                       "7. Upload Image\n"
+                       "8. Get Image Info\n"
+                       "9. Delete Image\n"
+                       "10. Analyze Project\n"
+                       "11. Configure Training\n"
+                       "12. Enqueue Training\n"
+                       "13. Get Training Results\n"
+                       "14. Enqueue Inference\n"
+                       "15. Get Inference Results\n" 
+                       "16. Quit\n"
+                       "Your choice: ")
         action = actions.get(choice)
         if action:
             action()
