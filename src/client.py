@@ -3,7 +3,7 @@ import requests
 def handle_response(response):
     try:
         print("Response:", response.json())
-    except ValueError:  # Includes simplejson.decoder.JSONDecodeError
+    except ValueError:
         print("Operation completed successfully, but no data returned.")
 
 def register_user():
@@ -59,6 +59,35 @@ def upload_image():
     response = requests.post(url, files=files, data=data)
     handle_response(response)
 
+def get_image():
+    image_id = input("Enter Image ID: ")
+    url = f"http://localhost:8000/image/{image_id}/"
+    response = requests.get(url)
+    handle_response(response)
+
+def delete_image():
+    image_id = input("Enter Image ID to delete: ")
+    url = f"http://localhost:8000/delete_image/{image_id}/"
+    response = requests.delete(url)
+    handle_response(response)
+
+def analyze_project():
+    project_id = input("Enter Project ID for analysis: ")
+    url = f"http://localhost:8000/analyze_project/{project_id}/"
+    response = requests.get(url)
+    handle_response(response)
+
+def configure_training():
+    project_id = input("Enter Project ID to configure training: ")
+    url = f"http://localhost:8000/configure_training/{project_id}/"
+    config_data = {
+        "learning_rate": float(input("Enter learning rate: ")),
+        "epochs": int(input("Enter number of epochs: ")),
+        "batch_size": int(input("Enter batch size: "))
+    }
+    response = requests.post(url, json=config_data)
+    handle_response(response)
+
 def main():
     actions = {
         '1': register_user,
@@ -68,10 +97,14 @@ def main():
         '5': delete_user,
         '6': delete_project,
         '7': upload_image,
-        '8': exit
+        '8': get_image,
+        '9': delete_image,
+        '10': analyze_project,
+        '11': configure_training,
+        '12': exit
     }
     while True:
-        choice = input("\nEnter number: \n1. Register User \n2. Create Project \n3. Get User Info\n4. Get Project Info\n5. Delete User\n6. Delete Project\n7. Upload Image\n8. Quit\n")
+        choice = input("\nEnter number: \n1. Register User\n2. Create Project\n3. Get User Info\n4. Get Project Info\n5. Delete User\n6. Delete Project\n7. Upload Image\n8. Get Image Info\n9. Delete Image\n10. Analyze Project\n11. Configure Training\n12. Quit\n")
         action = actions.get(choice)
         if action:
             action()
