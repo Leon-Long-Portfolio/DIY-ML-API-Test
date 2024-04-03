@@ -35,12 +35,21 @@ class Project(db.Model):
     project_type = db.Column(db.String(50), nullable=False)
     name = db.Column(db.String(100), nullable=True)
     images = db.relationship('Image', backref='project', cascade="all, delete-orphan")
+    training_config = db.relationship('TrainingConfig', uselist=False, back_populates='project')
 
 class Image(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(100), nullable=False)
     label = db.Column(db.String(100), nullable=True)
     project_id = db.Column(db.Integer, db.ForeignKey('project.id', ondelete='CASCADE'), nullable=False)
+
+class TrainingConfig(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id', ondelete='CASCADE'), nullable=False)
+    learning_rate = db.Column(db.Float, nullable=False, default=0.001)
+    epochs = db.Column(db.Integer, nullable=False, default=10)
+    batch_size = db.Column(db.Integer, nullable=False, default=32)
+    project = db.relationship('Project', back_populates='training_config')
 
 @app.route('/register/', methods=['POST'])
 def register():
@@ -117,6 +126,7 @@ def delete_project():
     db.session.commit()
     return jsonify({'message': 'Project deleted successfully'}), 200
 
+# Upload image
 @app.route('/upload_image/<int:project_id>/', methods=['POST'])
 def upload_image(project_id):
     project = Project.query.get(project_id)
@@ -135,6 +145,72 @@ def upload_image(project_id):
     db.session.commit()
     return jsonify({'message': 'Image uploaded successfully', 'filename': filename}), 201
 
+# GET image information
+@app.route('/image/<int:image_id>/', methods=['GET'])
+def get_image(image_id):
+    image = Image.query.get(image_id)
+    if not image:
+        return jsonify({'error': 'Image not found'}), 404
+    image_info = {
+        'image_id': image.id,
+        'filename': image.filename,
+        'label': image.label,
+        'project_id': image.project_id,
+        'project_name': image.project.name,
+        'user_id': image.project.user_id,
+        'associated_user': image.project.user.username
+    }
+    return jsonify(image_info), 200
+
+# Add this route to delete an image
+@app.route('/delete_image/<int:image_id>/', methods=['DELETE'])
+def delete_image(image_id):
+    image = Image.query.get(image_id)
+    if not image:
+        return jsonify({'error': 'Image not found'}), 404
+    filename = image.filename
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    os.remove(filepath)
+    db.session.delete(image)
+    db.session.commit()
+    return jsonify({'message': 'Image deleted successfully'}), 200
+
+# GET analysis
+@app.route('/analyze_project/<int:project_id>/', methods=['GET'])
+def analyze_project(project_id):
+    # Placeholder for analysis logic
+    return jsonify({'message': 'Data analysis result', 'project_id': project_id}), 200
+
+@app.route('/configure_training/<int:project_id>/', methods=['POST'])
+def configure_training(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    data = request.json
+    if not data or 'learning_rate' not in data or 'epochs' not in data or 'batch_size' not in data:
+        return jsonify({'error': 'Missing training parameters'}), 400
+    
+    if project.training_config:
+        config = project.training_config
+    else:
+        config = TrainingConfig(project_id=project_id)
+        db.session.add(config)
+    
+    config.learning_rate = data['learning_rate']
+    config.epochs = data['epochs']
+    config.batch_size = data['batch_size']
+    db.session.commit()
+    
+    return jsonify({'message': 'Training configuration updated successfully'}), 200
+
+
+# Add this route to serve images
+@app.route('/uploads/<filename>', methods=['GET'])
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# Allowed file formats
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
