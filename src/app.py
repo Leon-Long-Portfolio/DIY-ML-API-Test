@@ -3,6 +3,11 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import os
+import threading
+import queue
+from datetime import datetime
+import numpy as np
+from collections import Counter
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///project.db'
@@ -11,7 +16,6 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-
 db = SQLAlchemy(app)
 
 # Ensure the upload folder exists
@@ -34,13 +38,14 @@ class Project(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     project_type = db.Column(db.String(50), nullable=False)
     name = db.Column(db.String(100), nullable=True)
-    images = db.relationship('Image', backref='project', cascade="all, delete-orphan")
+    images = db.relationship('Image', backref='project', lazy=True)
     training_config = db.relationship('TrainingConfig', uselist=False, back_populates='project')
 
 class Image(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(100), nullable=False)
     label = db.Column(db.String(100), nullable=True)
+    feature_size = db.Column(db.Float, nullable=True)
     project_id = db.Column(db.Integer, db.ForeignKey('project.id', ondelete='CASCADE'), nullable=False)
 
 class TrainingConfig(db.Model):
@@ -50,6 +55,68 @@ class TrainingConfig(db.Model):
     epochs = db.Column(db.Integer, nullable=False, default=10)
     batch_size = db.Column(db.Integer, nullable=False, default=32)
     project = db.relationship('Project', back_populates='training_config')
+
+# New model for storing training results
+class TrainingResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
+    accuracy = db.Column(db.Float)
+    loss = db.Column(db.Float)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class InferenceResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    image_id = db.Column(db.Integer, db.ForeignKey('image.id'), nullable=False)
+    result = db.Column(db.String(256))  # Placeholder for inference result
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# Queue setup
+training_queue = queue.Queue()
+inference_queue = queue.Queue()
+
+def training_worker():
+    with app.app_context():
+        while True:
+            project_id = training_queue.get()
+            if project_id is None:  # Shutdown signal
+                break
+            # Placeholder for training logic
+            print(f"Training project {project_id}...")
+            # Simulate saving training results
+            result = TrainingResult(project_id=project_id, accuracy=0.9, loss=0.1)
+            db.session.add(result)
+            db.session.commit()
+            training_queue.task_done()
+
+threading.Thread(target=training_worker, daemon=True).start()
+
+def inference_worker():
+    with app.app_context():
+        while True:
+            task = inference_queue.get()
+            if task is None:
+                break
+
+            model_loaded = True 
+            if model_loaded:
+                print(f"Model loaded successfully for project_id: {task['project_id']}")
+
+            prediction = "cat" 
+            print(f"Prediction for image_id {task['image_id']}: {prediction}")
+
+            result = InferenceResult(image_id=task['image_id'], result=prediction)
+            db.session.add(result)
+            db.session.commit()
+            print(f"Inference result saved for image_id {task['image_id']}")
+
+            inference_queue.task_done()
+
+threading.Thread(target=inference_worker, daemon=True).start()
+
+@app.route('/enqueue_training/<int:project_id>/', methods=['POST'])
+def enqueue_training(project_id):
+    training_queue.put(project_id)
+    return jsonify({'message': 'Training task enqueued'}), 202
 
 @app.route('/register/', methods=['POST'])
 def register():
@@ -132,17 +199,28 @@ def upload_image(project_id):
     project = Project.query.get(project_id)
     if not project:
         return jsonify({'error': 'Project not found'}), 404
+    
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
+    
     file = request.files['file']
     if file.filename == '' or not allowed_file(file.filename):
         return jsonify({'error': 'Invalid file or no file selected'}), 400
+    
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    # Save file to get size
     file.save(filepath)
-    image = Image(filename=filename, label=request.form.get('label', ''), project_id=project.id)
+    
+    # Calculate the file size (feature_size)
+    feature_size = os.path.getsize(filepath)
+    
+    # Create a new Image instance with feature_size
+    image = Image(filename=filename, label=request.form.get('label', ''), project_id=project.id, feature_size=feature_size)
     db.session.add(image)
     db.session.commit()
+    
     return jsonify({'message': 'Image uploaded successfully', 'filename': filename}), 201
 
 # GET image information
@@ -163,23 +241,69 @@ def get_image(image_id):
     return jsonify(image_info), 200
 
 # Add this route to delete an image
-@app.route('/delete_image/<int:image_id>/', methods=['DELETE'])
-def delete_image(image_id):
-    image = Image.query.get(image_id)
+@app.route('/delete_image/<username>/<int:project_id>/<int:image_id>/', methods=['DELETE'])
+def delete_image(username, project_id, image_id):
+    # Check if the user exists
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Check if the project exists and belongs to the user
+    project = Project.query.filter_by(id=project_id, user_id=user.id).first()
+    if not project:
+        return jsonify({'error': 'Project not found or does not belong to the specified user'}), 404
+
+    # Check if the image exists and belongs to the project
+    image = Image.query.filter_by(id=image_id, project_id=project.id).first()
     if not image:
-        return jsonify({'error': 'Image not found'}), 404
-    filename = image.filename
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    os.remove(filepath)
-    db.session.delete(image)
-    db.session.commit()
-    return jsonify({'message': 'Image deleted successfully'}), 200
+        return jsonify({'error': 'Image not found or does not belong to the specified project'}), 404
+
+    # Proceed with deleting the image file and database record
+    try:
+        filename = image.filename
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        os.remove(filepath)  # Delete the file
+        db.session.delete(image)  # Delete the database record
+        db.session.commit()
+        return jsonify({'message': 'Image deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 # GET analysis
 @app.route('/analyze_project/<int:project_id>/', methods=['GET'])
 def analyze_project(project_id):
-    # Placeholder for analysis logic
-    return jsonify({'message': 'Data analysis result', 'project_id': project_id}), 200
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    images = Image.query.filter_by(project_id=project_id).all()
+    
+    if not images:
+        return jsonify({'message': 'No images found for this project'}), 404
+    
+    # Extract feature sizes
+    feature_sizes = [image.feature_size for image in images if image.feature_size is not None]
+    
+    if not feature_sizes:
+        return jsonify({'message': 'No feature sizes available for images in this project'}), 404
+    
+    total_size = sum(feature_sizes)
+    avg_size = total_size / len(feature_sizes)
+    min_size = min(feature_sizes)
+    max_size = max(feature_sizes)
+    
+    analysis_result = {
+        'project_id': project_id,
+        'num_images': len(images),
+        'total_feature_size': total_size,
+        'average_feature_size': avg_size,
+        'smallest_image_size': min_size,
+        'largest_image_size': max_size,
+    }
+    
+    return jsonify(analysis_result), 200
+
 
 @app.route('/configure_training/<int:project_id>/', methods=['POST'])
 def configure_training(project_id):
@@ -204,6 +328,32 @@ def configure_training(project_id):
     
     return jsonify({'message': 'Training configuration updated successfully'}), 200
 
+# GET training results
+@app.route('/training_results/<int:project_id>/', methods=['GET'])
+def get_training_results(project_id):
+    results = TrainingResult.query.filter_by(project_id=project_id).all()
+    if not results:
+        return jsonify({'error': 'No training results found'}), 404
+    return jsonify([{'accuracy': r.accuracy, 'loss': r.loss, 'created_at': r.created_at.strftime('%Y-%m-%d %H:%M:%S')} for r in results]), 200
+
+@app.route('/enqueue_inference/<int:project_id>/<int:image_id>/', methods=['POST'])
+def enqueue_inference(project_id, image_id):
+    """Enqueues an inference task for a specific project and image."""
+    # Simulate the inference task enqueueing
+    inference_task = {'project_id': project_id, 'image_id': image_id}
+    inference_queue.put(inference_task)
+    return jsonify({'message': 'Inference task enqueued'}), 202
+
+@app.route('/inference_results/<int:image_id>/', methods=['GET'])
+def get_inference_results(image_id):
+    result = InferenceResult.query.filter_by(image_id=image_id).first()
+    if not result:
+        return jsonify({'error': 'Inference result not found'}), 404
+    return jsonify({
+        'image_id': image_id,
+        'prediction': result.result,
+        'created_at': result.created_at.strftime('%Y-%m-%d %H:%M:%S')
+    }), 200
 
 # Add this route to serve images
 @app.route('/uploads/<filename>', methods=['GET'])
